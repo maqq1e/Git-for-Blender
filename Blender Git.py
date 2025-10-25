@@ -406,7 +406,30 @@ class DeleteState(bpy.types.Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
 
+def replace_datablock_references(old_data, new_data):
+    # Loop through all ID datablocks in the file
+    for id_block in list(bpy.data.objects) + list(bpy.data.materials) + list(bpy.data.meshes) + list(bpy.data.cameras) + list(bpy.data.lights):
+        # Check if the datablock has custom properties
+        for key, value in id_block.items():
+            # Skip built-in properties
+            if key.startswith("_"):
+                continue
 
+            # Check if the property is a pointer to the old datablock
+            if isinstance(value, bpy.types.ID) and value == old_data:
+                id_block[key] = new_data
+                print(f"Updated custom property '{key}' in {id_block.name}")
+
+        # Also check RNA-defined pointer properties (not just ID properties)
+        for prop in id_block.bl_rna.properties:
+            if isinstance(prop, bpy.types.PointerProperty):
+                try:
+                    if getattr(id_block, prop.identifier) == old_data:
+                        setattr(id_block, prop.identifier, new_data)
+                        print(f"Updated pointer property '{prop.identifier}' in {id_block.name}")
+                except Exception:
+                    pass  # Some properties may not be settable or may raise errors
+                
 def _reassign_meshes(self, context, source_obj, target_obj):
     # Define source and target objects
 
@@ -425,19 +448,19 @@ def _reassign_meshes(self, context, source_obj, target_obj):
 
     # Get the original mesh data-block from the source object
     old_mesh = source_obj.data
+    replace_datablock_references(old_mesh, new_mesh)
+    # if old_mesh and new_mesh:
+    #     # Loop through all objects using the old mesh
+    #     for obj in bpy.data.objects:
+    #         if obj.data == old_mesh:
+    #             obj.data = new_mesh
+    #             print(f"Replaced mesh in object: {obj.name}")
 
-    if old_mesh and new_mesh:
-        # Loop through all objects using the old mesh
-        for obj in bpy.data.objects:
-            if obj.data == old_mesh:
-                obj.data = new_mesh
-                print(f"Replaced mesh in object: {obj.name}")
-
-        # Optional: remove old mesh if no longer used
-        if old_mesh.users == 0:
-            bpy.data.meshes.remove(old_mesh)
-    else:
-        print("One or both mesh datablocks not found.")
+    #     # Optional: remove old mesh if no longer used
+    #     if old_mesh.users == 0:
+    #         bpy.data.meshes.remove(old_mesh)
+    # else:
+    #     print("One or both mesh datablocks not found.")
 class ReassignObject(bpy.types.Operator):
     bl_idname = "git.reassign_object"
     bl_label = "Reassign Objects"
