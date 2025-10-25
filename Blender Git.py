@@ -389,6 +389,14 @@ UsesClasses.extend(UI_Classes)
 UsesClasses.append(GitStates)
 UsesClasses.append(GitProperties)
 
+
+
+# After Load
+@bpy.app.handlers.persistent
+def after_load(context):
+    _getVersionStatesList(None, context)
+
+
 # Register Classes
 def register():
 
@@ -397,12 +405,16 @@ def register():
     
     setProperties()
 
+    bpy.app.handlers.load_post.append(after_load) # Load datas after load blender
+
 def unregister():    
     
     for useClass in UsesClasses:
         bpy.utils.unregister_class(useClass)
 
     delProperties()
+    
+    bpy.app.handlers.load_post.remove(after_load)
 
 # if __name__ == "__main__":
 #     register()
