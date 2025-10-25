@@ -125,9 +125,23 @@ def save_selected_objects_backup(context, objects, directory):
 
     return unique_path
 
+def save_all_objects_backup(context, objects, directory):
+
+    unique_path = create_unique_path(context, directory)
+
+    return unique_path
+
+def delete_file_by_path(file_path):
+    # Check if the file exists before deleting
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+
 def _getChangesObjects(self, context):
 
+
     git = context.window_manager.git
+
 
     # Unload Libraries
     if len(bpy.data.libraries) > 0:
@@ -159,6 +173,11 @@ def _getChangesObjects(self, context):
         obj_ref.name = obj.name
         obj_ref.obj = obj
 
+    # Is Preview? 
+    if git.preview_mode:
+        _previewChanges(self, context)
+
+
 def _selectStateObject(self, context):
     
     git = context.window_manager.git
@@ -176,6 +195,32 @@ def _selectStateObject(self, context):
         obj.select_set(True)
         context.view_layer.objects.active = obj
 
+def _previewChanges(self, context):
+    git = context.window_manager.git
+
+    if len(git.state_objects) == 0:
+        self.report({'ERROR'}, f"You have no objects in commit for preview.")
+        return {'FINISHED'}
+
+
+    # Name of the collection in the external file (usually 'Collection' or custom)
+    target_collection_name = git.temp_col_name
+    target_collection = bpy.data.collections.get(target_collection_name)
+    if target_collection:
+        bpy.data.collections.remove(target_collection)
+
+    if git.preview_mode:
+        # Create a new collection in the current scene
+        target_collection = bpy.data.collections.new(target_collection_name)
+        bpy.context.scene.collection.children.link(target_collection)
+
+
+        for ref_obj in git.state_objects:
+            obj = ref_obj.obj
+            target_collection.objects.link(obj)
+
+        # target_collection.hide_select = True
+        target_collection.color_tag = "COLOR_01"
 
 # UI
 
@@ -243,40 +288,6 @@ UI_Classes = [
 
 # OPERATORS
 
-class PreviewChanges(bpy.types.Operator):
-    bl_idname = "git.preview_changes"
-    bl_label = "Preview Commit Changes"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    def execute(self, context):
-
-        git = context.window_manager.git
-
-        if len(git.state_objects) == 0:
-            self.report({'ERROR'}, f"You have no objects in commit for preview.")
-            return {'FINISHED'}
-
-
-        # Name of the collection in the external file (usually 'Collection' or custom)
-        target_collection_name = git.temp_col_name
-
-        if target_collection_name in context.scene.collection.children:
-            bpy.data.collections.remove(bpy.data.collections[target_collection_name])
-        else:
-            # Create a new collection in the current scene
-            target_collection = bpy.data.collections.new(target_collection_name)
-            bpy.context.scene.collection.children.link(target_collection)
-
-
-            for ref_obj in git.state_objects:
-                obj = ref_obj.obj
-                target_collection.objects.link(obj)
-
-            # target_collection.hide_select = True
-            target_collection.color_tag = "COLOR_01"
-            
-        return {'FINISHED'}
-
 # Operator for saving collection backup
 class SaveCollectionBackup(bpy.types.Operator):
     '''Save selected collection as separate .blend file'''
@@ -319,7 +330,9 @@ class SaveSelectedObjectsBackup(bpy.types.Operator):
                     self.report({'ERROR'}, "No objects selected")
             else:
                 save_backup(context, save_all_objects_backup, context.selected_objects)
-
+            
+            _getVersionStatesList(self, context)
+            _getChangesObjects(self, context)
                 
             return {'FINISHED'}
         else:
@@ -358,6 +371,8 @@ class DeleteState(bpy.types.Operator):
         delete_file_by_path(directory)
 
         _getVersionStatesList(self, context)
+
+        _getChangesObjects(self, context)
        
         return {'FINISHED'}
     
@@ -493,7 +508,6 @@ class GetVersionStatesList(bpy.types.Operator):
     
 
 OPERATORS_Classes = [
-    PreviewChanges,
     SaveCollectionBackup,
     SaveSelectedObjectsBackup,
     OpenFile,
@@ -542,7 +556,7 @@ class ControlVersions(bpy.types.Panel):
 
         _row.operator(ReassignAllObject.bl_idname, text="Batch Reassign", icon="PASTEDOWN")
 
-        _row.operator(PreviewChanges.bl_idname, text="Preview", icon="HIDE_OFF")
+        _row.prop(git, "preview_mode", text="Preview", icon="HIDE_OFF", toggle=True)
         
         box.template_list("BASICLIST_UL_objects", "", git , "state_objects", git, "active_state_objects")
 
@@ -599,8 +613,12 @@ class GitProperties(bpy.types.PropertyGroup):
     state_objects: bpy.props.CollectionProperty(type=StateObjects)
     active_state_objects: bpy.props.IntProperty(default=0, update=_selectStateObject)
 
+
     batch_selected_only: bpy.props.BoolProperty(default=True, name="Reassign Selected Only")
     commit_selected_only: bpy.props.BoolProperty(default=True, name="Commit Selected Only")
+
+    
+    preview_mode: bpy.props.BoolProperty(default=False, update=_previewChanges)
 
 
     
