@@ -3,6 +3,24 @@ import os
 
 # DEF
 
+def render_preview(context, directory):
+    # Set render settings
+    bpy.data.scenes[0].render.resolution_x = 128
+    bpy.data.scenes[0].render.resolution_y = 128
+    bpy.data.scenes[0].render.resolution_percentage = 100
+    #render
+    bpy.ops.render.opengl()
+    #save image
+    img_name = "temp_thumb.png"
+    path = os.path.join(directory, img_name)
+    bpy.data.images['Render Result'].save_render(path)
+    bpy.ops.image.open(filepath = path)
+    bpy.data.images[img_name].pack()
+    bpy.data.images[img_name].use_fake_user = True
+    texture = bpy.data.textures.new("temp_thumb", "IMAGE")
+    texture.image = bpy.data.images[img_name]
+    texture.use_fake_user = True
+    
 def create_unique_path(context, directory):
 
     git = context.window_manager.git
@@ -74,6 +92,8 @@ def save_backup(context, func, data):
     backup_filepath = func(context, data, directory)    
     
     delete_unused_data()
+
+    render_preview(context, directory + "\\" + git.subfolder_path)
 
     # Create a new blend file for the backup
     bpy.ops.wm.save_as_mainfile(filepath=backup_filepath, copy=True)
@@ -164,6 +184,13 @@ def _getChangesObjects(self, context):
     with bpy.data.libraries.load(backup_filepath, link=True) as (data_from, data_to):
         # Append all objects
         data_to.objects = data_from.objects
+        data_to.textures = data_from.textures
+
+
+    for tex in data_to.textures:
+        if tex.name == "temp_thumb":
+            git.versions_states[blendfile.name].preview = tex
+
 
     git.state_objects.clear()
     # Store actual object references in a Python list
@@ -379,23 +406,6 @@ class DeleteState(bpy.types.Operator):
     def invoke(self, context, event):
         return context.window_manager.invoke_confirm(self, event)
 
-class Tet(bpy.types.Operator):
-    bl_idname = "git.tet"
-    bl_label = "Open File"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    path: bpy.props.StringProperty()
-           
-    def execute(self, context):       
-        git = context.window_manager.git
-        filepath = bpy.data.filepath
-        directory = os.path.dirname(filepath)
-        directory = directory + "\\" + git.subfolder_path
-               
-        render_preview(context, directory)
-       
-        return {'FINISHED'}
-
 
 def _reassign_objects(self, context, source_obj, target_obj):
     # Define source and target objects
@@ -558,6 +568,11 @@ class ControlVersions(bpy.types.Panel):
 
         _row.prop(git, "preview_mode", text="Preview", icon="HIDE_OFF", toggle=True)
         
+        current_state = git.versions_states[git.current_state]
+
+        if current_state.preview:
+            box.template_preview(git.versions_states[git.current_state].preview)
+        
         box.template_list("BASICLIST_UL_objects", "", git , "state_objects", git, "active_state_objects")
 
 
@@ -586,6 +601,7 @@ bl_info = {
 
 class GitStates(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(default="")
+    preview: bpy.props.PointerProperty(type=bpy.types.Texture)
 
     
 class StateObjects(bpy.types.PropertyGroup):
