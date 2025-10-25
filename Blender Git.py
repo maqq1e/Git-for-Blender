@@ -5,8 +5,8 @@ import os
 
 def create_unique_path(context, directory):
 
-    props = context.window_manager.git
-    commit_text = props.commit_text
+    git = context.window_manager.git
+    commit_text = git.commit_text
     
     blendname = bpy.data.filepath[bpy.data.filepath.rfind('\\') + 1:-6]
 
@@ -17,7 +17,7 @@ def create_unique_path(context, directory):
     while isFileExist:
         
         # Set the filename for the backup
-        backup_filename = f".bgit/{blendname}-{commit_text}-{number}.blend"
+        backup_filename = f"{git.subfolder_path}/{blendname}-{commit_text}-{number}.blend"
 
         backup_filepath = os.path.join(directory, backup_filename)
 
@@ -54,6 +54,8 @@ def move_objects_to_collection(objects, target_collection_name):
     return target_collection
 
 def save_backup(context, func, data):
+    git = context.window_manager.git
+
     bpy.ops.wm.save_mainfile()
 
     # Get the current blend file path
@@ -66,8 +68,8 @@ def save_backup(context, func, data):
     directory = os.path.dirname(blend_filepath)
     
     # Create path
-    if not os.path.exists(directory + "\\.bgit"):
-        os.makedirs(directory + "\\.bgit")
+    if not os.path.exists(directory + "\\" + git.subfolder_path):
+        os.makedirs(directory + "\\" + git.subfolder_path)
 
     backup_filepath = func(context, data, directory)    
     
@@ -129,8 +131,8 @@ def _getChangesObjects(self, context):
 
     # Unload Libraries
     if len(bpy.data.libraries) > 0:
-        if git.current_state != "":
-            prev_library = bpy.data.libraries[git.current_state]
+        prev_library = bpy.data.libraries.get(git.current_state)
+        if prev_library:
             bpy.data.libraries.remove(prev_library)
 
     
@@ -141,11 +143,11 @@ def _getChangesObjects(self, context):
 
     git.current_state = blendfile.name
 
-    backup_filename = f".bgit/" + blendfile.name
+    backup_filename = git.subfolder_path + "/" + blendfile.name
     backup_filepath = os.path.join(directory, backup_filename)
 
     # This will store the names of all objects in the external file
-    with bpy.data.libraries.load(backup_filepath, link=False) as (data_from, data_to):
+    with bpy.data.libraries.load(backup_filepath, link=True) as (data_from, data_to):
         # Append all objects
         data_to.objects = data_from.objects
 
@@ -156,6 +158,23 @@ def _getChangesObjects(self, context):
 
         obj_ref.name = obj.name
         obj_ref.obj = obj
+
+def _selectStateObject(self, context):
+    
+    git = context.window_manager.git
+
+    if git.temp_col_name in context.scene.collection.children:
+
+        target_col = context.scene.collection.children[git.temp_col_name]
+        
+        _obj = git.state_objects[git.active_state_objects]
+
+        bpy.ops.object.select_all(action='DESELECT')
+
+        obj = target_col.objects[_obj.name]
+
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
 
 
 # UI
@@ -183,12 +202,21 @@ class BASICLIST_UL_itemslots(bpy.types.UIList):
         
         layout.prop(item, "name", text="", emboss=False, icon_value=icon)    
 
-class BASICLIST_UL_itemslots_all(bpy.types.UIList):
+class BASICLIST_UL_objects(bpy.types.UIList):
     
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         ob = data
-        
-        layout.prop(item, "name", text="", emboss=False, icon_value=icon)
+        git = context.window_manager.git
+
+        active_obj = context.active_object
+
+        row = layout.row()
+        if active_obj:
+            if active_obj.name == item.name:
+                row.alert = True
+        op = row.operator(ReassignObjects.bl_idname, text="", icon="IMPORT")
+        op.obj_name = item.name
+        row.label(text=item.name)
 
 class BASICLIST_UL_states(bpy.types.UIList):
     
@@ -200,25 +228,49 @@ class BASICLIST_UL_states(bpy.types.UIList):
         
         row.label(text=item.name.replace(".blend", ""))
 
-        op = row.operator(OpenFile.bl_idname)
+        op = row.operator(OpenFile.bl_idname, text="", icon="FILE_FOLDER")
         op.path = git.subfolder_path + "\\" + item.name
 
 UI_Classes = [
     BASICLIST_UL_itemslots,
     BASICLIST_UL_states,
-    BASICLIST_UL_itemslots_all
+    BASICLIST_UL_objects
 ]
 
 
 # OPERATORS
 
-class MatchBlendFilesOperator(bpy.types.Operator):
-    bl_idname = "operators.match_blend_files"
-    bl_label = "Find Matching Blend Files"
+class PreviewChanges(bpy.types.Operator):
+    bl_idname = "git.preview_changes"
+    bl_label = "Preview Commit Changes"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
 
-        pass
+        git = context.window_manager.git
+
+        if len(git.state_objects) == 0:
+            self.report({'ERROR'}, f"You have no objects in commit for preview.")
+            return {'FINISHED'}
+
+
+        # Name of the collection in the external file (usually 'Collection' or custom)
+        target_collection_name = git.temp_col_name
+
+        if target_collection_name in context.scene.collection.children:
+            bpy.data.collections.remove(bpy.data.collections[target_collection_name])
+        else:
+            # Create a new collection in the current scene
+            target_collection = bpy.data.collections.new(target_collection_name)
+            bpy.context.scene.collection.children.link(target_collection)
+
+
+            for ref_obj in git.state_objects:
+                obj = ref_obj.obj
+                target_collection.objects.link(obj)
+
+            # target_collection.hide_select = True
+            target_collection.color_tag = "COLOR_01"
             
         return {'FINISHED'}
 
@@ -227,6 +279,7 @@ class SaveCollectionBackup(bpy.types.Operator):
     '''Save selected collection as separate .blend file'''
     bl_idname = "git.save_collection_backup"
     bl_label = "Save Backup"
+    bl_options = {'REGISTER', 'UNDO'}
     
     collection_name: bpy.props.StringProperty()
     
@@ -248,6 +301,7 @@ class SaveSelectedObjectsBackup(bpy.types.Operator):
     '''Save selected objects as separate .blend file'''
     bl_idname = "git.save_selected_objects_backup"
     bl_label = "Save Backup"
+    bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
         if bpy.data.is_saved:
@@ -264,6 +318,7 @@ class SaveSelectedObjectsBackup(bpy.types.Operator):
 class OpenFile(bpy.types.Operator):
     bl_idname = "git.open_file_by_os"
     bl_label = "Open File"
+    bl_options = {'REGISTER', 'UNDO'}
 
     path: bpy.props.StringProperty()
            
@@ -274,7 +329,62 @@ class OpenFile(bpy.types.Operator):
         os.startfile(os.path.join(directory, self.path))
        
         return {'FINISHED'}
-    
+
+def _reassign_objects(self, context, obj_name):
+    # Define source and target objects
+
+    git = context.window_manager.git
+
+    source_obj = context.active_object  # The object whose mesh will be replaced
+
+    # Name of the collection in the external file (usually 'Collection' or custom)
+    target_collection_name = git.temp_col_name
+
+    target_collection = bpy.data.collections.get(target_collection_name)
+
+    if target_collection:
+        if source_obj.name in target_collection.objects:
+            self.report({'ERROR'}, "Your active object is part of commit state!")
+
+    target_obj = git.state_objects[obj_name].obj  # The object whose mesh will be used
+
+    # Check if target_obj is linked
+    if target_obj.library or target_obj.data.library:
+        # Make a local copy of the mesh data
+        new_mesh = target_obj.data.copy()
+    else:
+        # If not linked, ensure it's single-user
+        if target_obj.data.users > 1:
+            target_obj.data = target_obj.data.copy()
+        new_mesh = target_obj.data
+
+    # Get the original mesh data-block from the source object
+    old_mesh = source_obj.data
+
+    # Replace mesh data-block for all objects using the old mesh
+    for obj in bpy.data.objects:
+        if obj.type == 'MESH' and obj.data == old_mesh:
+            obj.data = new_mesh
+
+    # Optional: remove the old mesh data-block if no longer used
+    if old_mesh.users == 0:
+        bpy.data.meshes.remove(old_mesh)
+
+class ReassignObjects(bpy.types.Operator):
+    bl_idname = "git.reassign_objects"
+    bl_label = "Reassign Objects"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    obj_name: bpy.props.StringProperty()
+           
+    def execute(self, context):
+
+        _reassign_objects(self, context, self.obj_name)
+       
+        return {'FINISHED'}
+
+   
+
 
 def _getVersionStatesList(self,context):
     git = context.window_manager.git
@@ -301,10 +411,10 @@ def _getVersionStatesList(self,context):
         new_item = git.versions_states.add()
 
         new_item.name = file
-
 class GetVersionStatesList(bpy.types.Operator):
     bl_idname = "git.get_states_list"
     bl_label = "Update States List"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         _getVersionStatesList(self, context)
@@ -312,11 +422,12 @@ class GetVersionStatesList(bpy.types.Operator):
     
 
 OPERATORS_Classes = [
-    MatchBlendFilesOperator,
+    PreviewChanges,
     SaveCollectionBackup,
     SaveSelectedObjectsBackup,
     OpenFile,
-    GetVersionStatesList
+    GetVersionStatesList,
+    ReassignObjects
 ]
 
 
@@ -350,8 +461,12 @@ class MatchBlendFilesPanel(bpy.types.Panel):
         box.template_list("BASICLIST_UL_states", "", git , "versions_states", git, "active_versions_states")
 
         box = layout.box()
+
+        _row = box.row()
+
+        _row.operator(PreviewChanges.bl_idname, text="Preview", icon="HIDE_OFF")
         
-        box.template_list("BASICLIST_UL_itemslots_all", "", git , "state_objects", git, "active_state_objects")
+        box.template_list("BASICLIST_UL_objects", "", git , "state_objects", git, "active_state_objects")
 
 
 
@@ -365,7 +480,7 @@ bl_info = {
     "author": "https://github.com/maqq1e",
     "description": "Easy way manage your project versions.",
     "blender": (4, 5, 0),
-    "version": (0, 0, 1),
+    "version": (0, 1, 1),
 }
 
 # class GitPreferences(bpy.types.AddonPreferences):
@@ -395,6 +510,8 @@ class GitProperties(bpy.types.PropertyGroup):
 
     subfolder_path: bpy.props.StringProperty(default=".bgit")
 
+    temp_col_name: bpy.props.StringProperty(default="TEMP_COMMIT_STAGE-DO NOT DELETE MANUALY")
+
     commit_text: bpy.props.StringProperty(default="Commit Description")
 
     versions_states: bpy.props.CollectionProperty(type=GitStates)
@@ -402,7 +519,7 @@ class GitProperties(bpy.types.PropertyGroup):
     active_versions_states: bpy.props.IntProperty(default=0, update=_getChangesObjects)
 
     state_objects: bpy.props.CollectionProperty(type=StateObjects)
-    active_state_objects: bpy.props.IntProperty(default=0)
+    active_state_objects: bpy.props.IntProperty(default=0, update=_selectStateObject)
 
 
     
