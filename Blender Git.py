@@ -214,7 +214,7 @@ class BASICLIST_UL_objects(bpy.types.UIList):
         if active_obj:
             if active_obj.name == item.name:
                 row.alert = True
-        op = row.operator(ReassignObjects.bl_idname, text="", icon="IMPORT")
+        op = row.operator(ReassignObject.bl_idname, text="", icon="PASTEDOWN")
         op.obj_name = item.name
         row.label(text=item.name)
 
@@ -330,12 +330,10 @@ class OpenFile(bpy.types.Operator):
        
         return {'FINISHED'}
 
-def _reassign_objects(self, context, obj_name):
+def _reassign_objects(self, context, source_obj, target_obj):
     # Define source and target objects
 
     git = context.window_manager.git
-
-    source_obj = context.active_object  # The object whose mesh will be replaced
 
     # Name of the collection in the external file (usually 'Collection' or custom)
     target_collection_name = git.temp_col_name
@@ -345,8 +343,6 @@ def _reassign_objects(self, context, obj_name):
     if target_collection:
         if source_obj.name in target_collection.objects:
             self.report({'ERROR'}, "Your active object is part of commit state!")
-
-    target_obj = git.state_objects[obj_name].obj  # The object whose mesh will be used
 
     # Check if target_obj is linked
     if target_obj.library or target_obj.data.library:
@@ -370,16 +366,40 @@ def _reassign_objects(self, context, obj_name):
     if old_mesh.users == 0:
         bpy.data.meshes.remove(old_mesh)
 
-class ReassignObjects(bpy.types.Operator):
-    bl_idname = "git.reassign_objects"
+class ReassignObject(bpy.types.Operator):
+    bl_idname = "git.reassign_object"
     bl_label = "Reassign Objects"
     bl_options = {'REGISTER', 'UNDO'}
 
     obj_name: bpy.props.StringProperty()
            
     def execute(self, context):
+        git = context.window_manager.git
 
-        _reassign_objects(self, context, self.obj_name)
+        source_obj = context.active_object
+
+        target_obj = git.state_objects[self.obj_name].obj
+
+        _reassign_objects(self, context, source_obj, target_obj)
+       
+        return {'FINISHED'}
+
+class ReassignAllObject(bpy.types.Operator):
+    bl_idname = "git.reassign_all_object"
+    bl_label = "Reassign Objects"
+    bl_options = {'REGISTER', 'UNDO'}
+           
+    def execute(self, context):
+        git = context.window_manager.git
+
+        objects = context.scene.objects
+
+        for ref_obj in git.state_objects:
+            source_obj = objects.get(ref_obj.name)
+
+            if source_obj:
+                target_obj = ref_obj.obj
+                _reassign_objects(self, context, source_obj, target_obj)
        
         return {'FINISHED'}
 
@@ -427,15 +447,16 @@ OPERATORS_Classes = [
     SaveSelectedObjectsBackup,
     OpenFile,
     GetVersionStatesList,
-    ReassignObjects
+    ReassignObject,
+    ReassignAllObject
 ]
 
 
 # MAIN
 
-class MatchBlendFilesPanel(bpy.types.Panel):
-    bl_label = "Match Blend Files"
-    bl_idname = "VIEW3D_PT_match_blend_files"
+class ControlVersions(bpy.types.Panel):
+    bl_label = "Control Versions"
+    bl_idname = "VIEW3D_PT_control_versions"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Script Manager'
@@ -462,7 +483,11 @@ class MatchBlendFilesPanel(bpy.types.Panel):
 
         box = layout.box()
 
-        _row = box.row()
+        _row = box.row(align=True)
+
+        _row.prop(git, "batch_selected_only", text="", toggle=True, icon="MOD_ARRAY")
+
+        _row.operator(ReassignAllObject.bl_idname, text="Batch Reassign", icon="PASTEDOWN")
 
         _row.operator(PreviewChanges.bl_idname, text="Preview", icon="HIDE_OFF")
         
@@ -471,7 +496,7 @@ class MatchBlendFilesPanel(bpy.types.Panel):
 
 
 MAIN_Classes = [
-    MatchBlendFilesPanel
+    ControlVersions
 ]
 
 
@@ -520,6 +545,8 @@ class GitProperties(bpy.types.PropertyGroup):
 
     state_objects: bpy.props.CollectionProperty(type=StateObjects)
     active_state_objects: bpy.props.IntProperty(default=0, update=_selectStateObject)
+
+    batch_selected_only: bpy.props.BoolProperty(default=True, name="Reassign Selected Only")
 
 
     
