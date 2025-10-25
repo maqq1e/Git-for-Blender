@@ -210,7 +210,7 @@ class BASICLIST_UL_objects(bpy.types.UIList):
 
         active_obj = context.active_object
 
-        row = layout.row()
+        row = layout.row(align=True)
         if active_obj:
             if active_obj.name == item.name:
                 row.alert = True
@@ -224,12 +224,15 @@ class BASICLIST_UL_states(bpy.types.UIList):
         ob = data
         git = context.window_manager.git
 
-        row = layout.row()
+        row = layout.row(align=True)
         
         row.label(text=item.name.replace(".blend", ""))
 
         op = row.operator(OpenFile.bl_idname, text="", icon="FILE_FOLDER")
         op.path = git.subfolder_path + "\\" + item.name
+        op = row.operator(DeleteState.bl_idname, text="", icon="TRASH")
+        op.path = git.subfolder_path + "\\" + item.name
+        
 
 UI_Classes = [
     BASICLIST_UL_itemslots,
@@ -304,12 +307,20 @@ class SaveSelectedObjectsBackup(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
+        git = context.window_manager.git
+
         if bpy.data.is_saved:
-            if context.selected_objects:
-                save_backup(context, save_selected_objects_backup, context.selected_objects)
-                self.report({'INFO'}, "Backup saved for selected objects")
+
+            if git.commit_selected_only:
+                if context.selected_objects:
+                    save_backup(context, save_selected_objects_backup, context.selected_objects)
+                    self.report({'INFO'}, "Backup saved for selected objects")
+                else:
+                    self.report({'ERROR'}, "No objects selected")
             else:
-                self.report({'ERROR'}, "No objects selected")
+                save_backup(context, save_all_objects_backup, context.selected_objects)
+
+                
             return {'FINISHED'}
         else:
             self.report({'ERROR'}, f"You need to save you .blend file!")
@@ -329,6 +340,47 @@ class OpenFile(bpy.types.Operator):
         os.startfile(os.path.join(directory, self.path))
        
         return {'FINISHED'}
+    
+class DeleteState(bpy.types.Operator):
+    bl_idname = "git.delete_state"
+    bl_label = "Delete Commit"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    path: bpy.props.StringProperty()
+           
+    def execute(self, context):       
+        git = context.window_manager.git
+        filepath = bpy.data.filepath
+        directory = os.path.dirname(filepath)
+
+        directory = os.path.join(directory, self.path)
+
+        delete_file_by_path(directory)
+
+        _getVersionStatesList(self, context)
+       
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+class Tet(bpy.types.Operator):
+    bl_idname = "git.tet"
+    bl_label = "Open File"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    path: bpy.props.StringProperty()
+           
+    def execute(self, context):       
+        git = context.window_manager.git
+        filepath = bpy.data.filepath
+        directory = os.path.dirname(filepath)
+        directory = directory + "\\" + git.subfolder_path
+               
+        render_preview(context, directory)
+       
+        return {'FINISHED'}
+
 
 def _reassign_objects(self, context, source_obj, target_obj):
     # Define source and target objects
@@ -365,7 +417,6 @@ def _reassign_objects(self, context, source_obj, target_obj):
     # Optional: remove the old mesh data-block if no longer used
     if old_mesh.users == 0:
         bpy.data.meshes.remove(old_mesh)
-
 class ReassignObject(bpy.types.Operator):
     bl_idname = "git.reassign_object"
     bl_label = "Reassign Objects"
@@ -448,7 +499,8 @@ OPERATORS_Classes = [
     OpenFile,
     GetVersionStatesList,
     ReassignObject,
-    ReassignAllObject
+    ReassignAllObject,
+    DeleteState,
 ]
 
 
@@ -475,8 +527,9 @@ class ControlVersions(bpy.types.Panel):
 
         box = layout.box()
 
-        _row = box.row()
+        _row = box.row(align=True)
 
+        _row.prop(git, "commit_selected_only", text="", toggle=True, icon="MOD_ARRAY")
         _row.operator(GetVersionStatesList.bl_idname, text="Update", icon="FILE_REFRESH")
         
         box.template_list("BASICLIST_UL_states", "", git , "versions_states", git, "active_versions_states")
@@ -547,6 +600,7 @@ class GitProperties(bpy.types.PropertyGroup):
     active_state_objects: bpy.props.IntProperty(default=0, update=_selectStateObject)
 
     batch_selected_only: bpy.props.BoolProperty(default=True, name="Reassign Selected Only")
+    commit_selected_only: bpy.props.BoolProperty(default=True, name="Commit Selected Only")
 
 
     
