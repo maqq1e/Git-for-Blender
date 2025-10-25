@@ -1,5 +1,6 @@
 import bpy
 import os
+from pathlib import Path
 
 # DEF
 
@@ -123,13 +124,17 @@ def save_collection_backup(context, collection, directory):
 
     return unique_path
 
-def save_selected_objects_backup(context, objects, directory):
+def prepare_selected_objects_backup(context, objects, directory):
 
     unique_path = create_unique_path(context, directory)
 
     new_collection_name = 'Backup - ' + objects[0].name
 
     new_collection = move_objects_to_collection(objects, new_collection_name)
+
+    if len(context.collection.objects) > 0:
+        temp_collection_name = 'Temp - ' + objects[0].name
+        temp_collection = move_objects_to_collection(context.collection.objects, temp_collection_name)
 
     # Deselect all collections
     for coll in bpy.data.collections:
@@ -155,7 +160,6 @@ def delete_file_by_path(file_path):
     # Check if the file exists before deleting
     if os.path.exists(file_path):
         os.remove(file_path)
-
 
 def _getChangesObjects(self, context):
 
@@ -203,7 +207,6 @@ def _getChangesObjects(self, context):
     # Is Preview? 
     if git.preview_mode:
         _previewChanges(self, context)
-
 
 def _selectStateObject(self, context):
     
@@ -280,12 +283,9 @@ class BASICLIST_UL_objects(bpy.types.UIList):
         ob = data
         git = context.window_manager.git
 
-        active_obj = context.active_object
-
         row = layout.row(align=True)
-        if active_obj:
-            if active_obj.name == item.name:
-                row.alert = True
+        if item.name not in context.scene.objects:
+            row.alert = True
         op = row.operator(ReassignObject.bl_idname, text="", icon="PASTEDOWN")
         op.obj_name = item.name
         row.label(text=item.name)
@@ -351,7 +351,7 @@ class SaveSelectedObjectsBackup(bpy.types.Operator):
 
             if git.commit_selected_only:
                 if context.selected_objects:
-                    save_backup(context, save_selected_objects_backup, context.selected_objects)
+                    save_backup(context, prepare_selected_objects_backup, context.selected_objects)
                     self.report({'INFO'}, "Backup saved for selected objects")
                 else:
                     self.report({'ERROR'}, "No objects selected")
@@ -407,7 +407,7 @@ class DeleteState(bpy.types.Operator):
         return context.window_manager.invoke_confirm(self, event)
 
 
-def _reassign_objects(self, context, source_obj, target_obj):
+def _reassign_meshes(self, context, source_obj, target_obj):
     # Define source and target objects
 
     git = context.window_manager.git
@@ -421,27 +421,23 @@ def _reassign_objects(self, context, source_obj, target_obj):
         if source_obj.name in target_collection.objects:
             self.report({'ERROR'}, "Your active object is part of commit state!")
 
-    # Check if target_obj is linked
-    if target_obj.library or target_obj.data.library:
-        # Make a local copy of the mesh data
-        new_mesh = target_obj.data.copy()
-    else:
-        # If not linked, ensure it's single-user
-        if target_obj.data.users > 1:
-            target_obj.data = target_obj.data.copy()
-        new_mesh = target_obj.data
+    new_mesh = target_obj.data.copy()
 
     # Get the original mesh data-block from the source object
     old_mesh = source_obj.data
 
-    # Replace mesh data-block for all objects using the old mesh
-    for obj in bpy.data.objects:
-        if obj.type == 'MESH' and obj.data == old_mesh:
-            obj.data = new_mesh
+    if old_mesh and new_mesh:
+        # Loop through all objects using the old mesh
+        for obj in bpy.data.objects:
+            if obj.data == old_mesh:
+                obj.data = new_mesh
+                print(f"Replaced mesh in object: {obj.name}")
 
-    # Optional: remove the old mesh data-block if no longer used
-    if old_mesh.users == 0:
-        bpy.data.meshes.remove(old_mesh)
+        # Optional: remove old mesh if no longer used
+        if old_mesh.users == 0:
+            bpy.data.meshes.remove(old_mesh)
+    else:
+        print("One or both mesh datablocks not found.")
 class ReassignObject(bpy.types.Operator):
     bl_idname = "git.reassign_object"
     bl_label = "Reassign Objects"
@@ -454,9 +450,11 @@ class ReassignObject(bpy.types.Operator):
 
         source_obj = context.active_object
 
-        target_obj = git.state_objects[self.obj_name].obj
+        if source_obj:
 
-        _reassign_objects(self, context, source_obj, target_obj)
+            target_obj = git.state_objects[self.obj_name].obj
+
+            _reassign_meshes(self, context, source_obj, target_obj)
        
         return {'FINISHED'}
 
@@ -473,13 +471,52 @@ class ReassignAllObject(bpy.types.Operator):
         for ref_obj in git.state_objects:
             source_obj = objects.get(ref_obj.name)
 
-            if source_obj:
-                target_obj = ref_obj.obj
-                _reassign_objects(self, context, source_obj, target_obj)
-       
+            if git.batch_selected_only:
+                if source_obj:
+                    if source_obj in context.selected_objects:
+                        target_obj = ref_obj.obj
+                        _reassign_meshes(self, context, source_obj, target_obj)
+            else:
+                if source_obj:
+                    target_obj = ref_obj.obj
+                    _reassign_meshes(self, context, source_obj, target_obj)
+                
         return {'FINISHED'}
 
-   
+class InsertState(bpy.types.Operator):
+    bl_idname = "git.insert_state"
+    bl_label = "Insert Commit"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    path: bpy.props.StringProperty()
+            
+    def execute(self, context):       
+        git = context.window_manager.git
+
+        if len(git.state_objects) == 0:
+            self.report({'ERROR'}, f"You have no objects in commit for insert.")
+            return {'FINISHED'}
+
+        target_collection_name = git.current_state
+        target_collection = bpy.data.collections.get(target_collection_name)
+        if target_collection:
+            bpy.data.collections.remove(target_collection)
+
+        target_collection = bpy.data.collections.new(target_collection_name)
+
+        context.scene.collection.children.link(target_collection)
+
+        for ref_obj in git.state_objects:
+            obj = ref_obj.obj.copy()
+            obj.data = ref_obj.obj.data.copy()
+
+            target_collection.objects.link(obj)
+        
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
 
 
 def _getVersionStatesList(self,context):
@@ -499,14 +536,24 @@ def _getVersionStatesList(self,context):
         os.makedirs(folder_path)
 
     # List all .blend files in the folder
-    blend_files = [f for f in os.listdir(folder_path) if f.endswith(".blend")]
+    # blend_files = [f for f in os.listdir(folder_path) if f.endswith(".blend")]
+    folder_path = Path(folder_path)
+    blend_files = [
+        (file, file.stat().st_ctime)
+        for file in folder_path.glob("*.blend")
+        if file.is_file()
+    ]
+
+    # Sort by creation time (oldest to newest)
+    blend_files.sort(key=lambda x: x[1])
 
 
     git.versions_states.clear()
-    for file in blend_files:
+    for file, ctime in blend_files:
         new_item = git.versions_states.add()
 
-        new_item.name = file
+        new_item.name = file.name
+        new_item.time = ctime
 class GetVersionStatesList(bpy.types.Operator):
     bl_idname = "git.get_states_list"
     bl_label = "Update States List"
@@ -525,6 +572,7 @@ OPERATORS_Classes = [
     ReassignObject,
     ReassignAllObject,
     DeleteState,
+    InsertState,
 ]
 
 
@@ -567,6 +615,8 @@ class ControlVersions(bpy.types.Panel):
         _row.operator(ReassignAllObject.bl_idname, text="Batch Reassign", icon="PASTEDOWN")
 
         _row.prop(git, "preview_mode", text="Preview", icon="HIDE_OFF", toggle=True)
+
+        box.operator(InsertState.bl_idname, text="Insert Commit", icon="IMPORT")
         
         current_state = git.versions_states[git.current_state]
 
@@ -601,6 +651,7 @@ bl_info = {
 
 class GitStates(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(default="")
+    time: bpy.props.FloatProperty(default=0.0)
     preview: bpy.props.PointerProperty(type=bpy.types.Texture)
 
     
