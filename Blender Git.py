@@ -1,6 +1,5 @@
 import bpy
 import os
-import time
 
 # DEF
 
@@ -124,6 +123,41 @@ def save_selected_objects_backup(context, objects, directory):
 
     return unique_path
 
+def _getChangesObjects(self, context):
+
+    git = context.window_manager.git
+
+    # Unload Libraries
+    if len(bpy.data.libraries) > 0:
+        if git.current_state != "":
+            prev_library = bpy.data.libraries[git.current_state]
+            bpy.data.libraries.remove(prev_library)
+
+    
+    blend_filepath = bpy.data.filepath
+    directory = os.path.dirname(blend_filepath)
+
+    blendfile = git.versions_states[git.active_versions_states]
+
+    git.current_state = blendfile.name
+
+    backup_filename = f".bgit/" + blendfile.name
+    backup_filepath = os.path.join(directory, backup_filename)
+
+    # This will store the names of all objects in the external file
+    with bpy.data.libraries.load(backup_filepath, link=False) as (data_from, data_to):
+        # Append all objects
+        data_to.objects = data_from.objects
+
+    git.state_objects.clear()
+    # Store actual object references in a Python list
+    for obj in data_to.objects:
+        obj_ref = git.state_objects.add()
+
+        obj_ref.name = obj.name
+        obj_ref.obj = obj
+
+
 # UI
 
 class BASICLIST_UL_itemslots(bpy.types.UIList):    
@@ -184,16 +218,7 @@ class MatchBlendFilesOperator(bpy.types.Operator):
 
     def execute(self, context):
 
-        versions_path = context.window_manager.git.versions_path
-
-        # This will store the names of all objects in the external file
-        with bpy.data.libraries.load(versions_path, link=False) as (data_from, data_to):
-            object_names = data_from.objects
-
-        # Print the list of object names
-        for name in object_names:
-            print(name)
-
+        pass
             
         return {'FINISHED'}
 
@@ -253,7 +278,6 @@ class OpenFile(bpy.types.Operator):
 
 def _getVersionStatesList(self,context):
     git = context.window_manager.git
-
     # Get the current blend file path
     blend_filepath = bpy.data.filepath
     if not blend_filepath:
@@ -325,6 +349,9 @@ class MatchBlendFilesPanel(bpy.types.Panel):
         
         box.template_list("BASICLIST_UL_states", "", git , "versions_states", git, "active_versions_states")
 
+        box = layout.box()
+        
+        box.template_list("BASICLIST_UL_itemslots_all", "", git , "state_objects", git, "active_state_objects")
 
 
 
@@ -353,6 +380,12 @@ bl_info = {
 class GitStates(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(default="")
 
+    
+class StateObjects(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(default="")
+    obj: bpy.props.PointerProperty(type=bpy.types.Object)
+
+
 class GitProperties(bpy.types.PropertyGroup):
     # Preferences
     # @property
@@ -362,11 +395,14 @@ class GitProperties(bpy.types.PropertyGroup):
 
     subfolder_path: bpy.props.StringProperty(default=".bgit")
 
-
     commit_text: bpy.props.StringProperty(default="Commit Description")
 
     versions_states: bpy.props.CollectionProperty(type=GitStates)
-    active_versions_states: bpy.props.IntProperty(default=0)
+    current_state: bpy.props.StringProperty(default="")
+    active_versions_states: bpy.props.IntProperty(default=0, update=_getChangesObjects)
+
+    state_objects: bpy.props.CollectionProperty(type=StateObjects)
+    active_state_objects: bpy.props.IntProperty(default=0)
 
 
     
@@ -387,6 +423,7 @@ UsesClasses.extend(OPERATORS_Classes)
 UsesClasses.extend(MAIN_Classes)
 UsesClasses.extend(UI_Classes)
 UsesClasses.append(GitStates)
+UsesClasses.append(StateObjects)
 UsesClasses.append(GitProperties)
 
 
@@ -413,7 +450,7 @@ def unregister():
         bpy.utils.unregister_class(useClass)
 
     delProperties()
-    
+
     bpy.app.handlers.load_post.remove(after_load)
 
 # if __name__ == "__main__":
