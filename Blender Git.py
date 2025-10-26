@@ -252,7 +252,6 @@ def _selectStateObject(self, context):
             action = git.object_datablocks.add()
             action.action = _obj.animation_data.action
 
-
 def _previewChanges(self, context):
     git = context.window_manager.git
 
@@ -440,7 +439,9 @@ class DeleteState(bpy.types.Operator):
 
         _getVersionStatesList(self, context)
 
-        _getChangesObjects(self, context)
+        git.active_versions_states = 0
+
+        git.active_state_objects = 0
        
         return {'FINISHED'}
     
@@ -498,8 +499,8 @@ def _reassign(self, context, source_data, target_data):
     old_object = source_data
     replace_datablock_references(old_object, new_object)
 
-
 class ReassignObject(bpy.types.Operator):
+    """Insert this data-block into active object"""
     bl_idname = "git.reassign_object"
     bl_label = "Reassign Objects"
     bl_options = {'REGISTER', 'UNDO'}
@@ -541,6 +542,7 @@ class ReassignObject(bpy.types.Operator):
         return {'FINISHED'}
 
 class ReassignAllObject(bpy.types.Operator):
+    """Update all object in scene which name is same in commit state"""
     bl_idname = "git.reassign_all_object"
     bl_label = "Reassign Objects"
     bl_options = {'REGISTER', 'UNDO'}
@@ -582,6 +584,7 @@ class ReassignAllObject(bpy.types.Operator):
         return {'FINISHED'}
 
 class InsertState(bpy.types.Operator):
+    """Insert whole commit in scene"""
     bl_idname = "git.insert_state"
     bl_label = "Insert Commit"
     bl_options = {'REGISTER', 'UNDO'}
@@ -803,6 +806,10 @@ class ControlVersions(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Script Manager'
+    
+    def draw_header(self, context):
+        """Optional: Draw the header of the panel."""
+        self.layout.label(icon='ASSET_MANAGER')  # Example header icon
 
     def draw(self, context):
         layout = self.layout
@@ -846,8 +853,8 @@ class ControlVersions(bpy.types.Panel):
 
         _row = box.row(align=True)
 
-        _row.prop(git, "reassign_object", text="", icon="OBJECT_DATAMODE")
-        _row.prop(git, "reassign_mesh", text="", icon="MESH_DATA")
+        # _row.prop(git, "reassign_object", text="", icon="OBJECT_DATAMODE")
+        # _row.prop(git, "reassign_mesh", text="", icon="MESH_DATA")
 
         box.template_list("BASICLIST_UL_datablocks", "", git , "object_datablocks", git, "active_object_datablocks")
 
@@ -863,7 +870,7 @@ bl_info = {
     "author": "https://github.com/maqq1e",
     "description": "Easy way manage your project versions.",
     "blender": (4, 5, 0),
-    "version": (0, 2, 5),
+    "version": (0, 3, 1),
 }
 
 # class GitPreferences(bpy.types.AddonPreferences):
@@ -913,20 +920,20 @@ class GitProperties(bpy.types.PropertyGroup):
 
     versions_states: bpy.props.CollectionProperty(type=GitStates)
     current_state: bpy.props.StringProperty(default="")
-    active_versions_states: bpy.props.IntProperty(default=0, update=_getChangesObjects)
+    active_versions_states: bpy.props.IntProperty(name="Select Commit", default=0, update=_getChangesObjects)
 
     state_objects: bpy.props.CollectionProperty(type=StateObjects)
-    active_state_objects: bpy.props.IntProperty(default=0, update=_selectStateObject)
+    active_state_objects: bpy.props.IntProperty(name="Select Object in Commit what store data-blocks", default=0, update=_selectStateObject)
 
     object_datablocks: bpy.props.CollectionProperty(type=DataBlocks)
-    active_object_datablocks: bpy.props.IntProperty(default=0)
+    active_object_datablocks: bpy.props.IntProperty(name="Select data-block", default=0)
 
 
 
     batch_selected_only: bpy.props.BoolProperty(default=True, name="Reassign Selected Only")
     commit_selected_only: bpy.props.BoolProperty(default=True, name="Commit Selected Only")
     
-    preview_mode: bpy.props.BoolProperty(default=False, update=_previewChanges)
+    preview_mode: bpy.props.BoolProperty(default=False, update=_previewChanges, description="Toggle View of Selected Commit")
 
     reassign_object: bpy.props.BoolProperty(default=False, name="Reassign Object")
     reassign_mesh: bpy.props.BoolProperty(default=True, name="Reassign Mesh")
