@@ -208,10 +208,13 @@ def _getChangesObjects(self, context):
     if git.preview_mode:
         _previewChanges(self, context)
 
+    git.active_state_objects = 0
+
 def _selectStateObject(self, context):
     
     git = context.window_manager.git
-
+    
+    # Select preview object
     if git.temp_col_name in context.scene.collection.children:
 
         target_col = context.scene.collection.children[git.temp_col_name]
@@ -224,6 +227,31 @@ def _selectStateObject(self, context):
 
         obj.select_set(True)
         context.view_layer.objects.active = obj
+
+    # Datablocks
+    git.object_datablocks.clear()
+
+    _obj = git.state_objects[git.active_state_objects].obj
+
+    if _obj:
+        obj = git.object_datablocks.add()
+        obj.obj = _obj
+
+    if _obj.data:
+        mesh = git.object_datablocks.add()
+        mesh.mesh = _obj.data
+
+    if _obj.material_slots:
+        for mat in _obj.material_slots:
+            _mat = git.object_datablocks.add()
+
+            _mat.material = mat.material
+
+    if _obj.animation_data:
+        if _obj.animation_data.action:
+            action = git.object_datablocks.add()
+            action.action = _obj.animation_data.action
+
 
 def _previewChanges(self, context):
     git = context.window_manager.git
@@ -254,40 +282,53 @@ def _previewChanges(self, context):
 
 # UI
 
-class BASICLIST_UL_itemslots(bpy.types.UIList):    
+class BASICLIST_UL_datablocks(bpy.types.UIList):    
 
-    def filter_items(self, context, data, propname):
-        items = getattr(data, propname)
-        flt_flags = [0] * len(items)
-        flt_neworder = []
+#     def filter_items(self, context, data, propname):
+#         items = getattr(data, propname)
+#         flt_flags = [0] * len(items)
+#         flt_neworder = []
         
-        prefix = context.view_layer['PREFIX']
+#         git = context.window_manager.git
 
-        for idx, item in enumerate(items):
-            
-            if prefix != "":
-                if prefix in item.name:
-                    flt_flags[idx] = self.bitflag_filter_item  # Show item
-#            else: item is hidden (flag remains 0)
+#         for idx, item in enumerate(items):
+#             if prefix != "":
+#                 flt_flags[idx] = self.bitflag_filter_item  # Show item
+# #            else: item is hidden (flag remains 0)
 
-        return flt_flags, flt_neworder
+#         return flt_flags, flt_neworder
     
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         ob = data
         
-        layout.prop(item, "name", text="", emboss=False, icon_value=icon)    
+        if item.obj:
+            layout.label(text=item.obj.name, icon="OBJECT_DATAMODE")    
+            layout.operator(CopyModifiers.bl_idname, text="", icon="MODIFIER")
+            layout.operator(CopyConstraints.bl_idname, text="", icon="CONSTRAINT")
+            layout.operator(CopyCustomProperties.bl_idname, text="", icon="PRESET_NEW")
+            # op = layout.operator(ReassignObject.bl_idname, text="Insert to Active")
+            # op.state = "OBJECT"
+        if item.mesh:
+            layout.label(text=item.mesh.name, icon="MESH_DATA") 
+            op = layout.operator(ReassignObject.bl_idname, text="Insert to Active")
+            op.state = "MESH"
+        if item.material:
+            layout.label(text=item.material.name, icon="MATERIAL")    
+            op = layout.operator(ReassignObject.bl_idname, text="Insert to Active")
+            op.state = "MATERIAL"
+        if item.action:
+            layout.label(text=item.action.name, icon="ACTION")    
+            # op = layout.operator(ReassignObject.bl_idname, text="Insert to Active")
+            # op.state = "ACTION"
 
 class BASICLIST_UL_objects(bpy.types.UIList):
     
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
         ob = data
-        git = context.window_manager.git
 
         row = layout.row(align=True)
         if item.name not in context.scene.objects:
             row.alert = True
-        op = row.operator(ReassignObject.bl_idname, text="", icon="PASTEDOWN")
-        op.obj_name = item.name
         row.label(text=item.name)
 
 class BASICLIST_UL_states(bpy.types.UIList):
@@ -307,7 +348,7 @@ class BASICLIST_UL_states(bpy.types.UIList):
         
 
 UI_Classes = [
-    BASICLIST_UL_itemslots,
+    BASICLIST_UL_datablocks,
     BASICLIST_UL_states,
     BASICLIST_UL_objects
 ]
@@ -408,7 +449,20 @@ class DeleteState(bpy.types.Operator):
 
 def replace_datablock_references(old_data, new_data):
     # Loop through all ID datablocks in the file
-    for id_block in list(bpy.data.objects) + list(bpy.data.materials) + list(bpy.data.meshes) + list(bpy.data.cameras) + list(bpy.data.lights):
+    target_list = None
+    if type(new_data) == bpy.types.Mesh:
+        target_list = list(bpy.data.objects)
+    if type(new_data) == bpy.types.Mesh:
+        target_list = list(bpy.data.meshes)
+    if type(new_data) == bpy.types.Material:
+        target_list = list(bpy.data.materials)
+    if type(new_data) == bpy.types.Action:
+        target_list = list(bpy.data.actions)
+
+    if target_list == None:
+        return target_list
+
+    for id_block in target_list:
         # Check if the datablock has custom properties
         for key, value in id_block.items():
             # Skip built-in properties
@@ -430,43 +484,27 @@ def replace_datablock_references(old_data, new_data):
                 except Exception:
                     pass  # Some properties may not be settable or may raise errors
                 
-def _reassign_meshes(self, context, source_obj, target_obj):
+def _reassign(self, context, source_data, target_data):
     # Define source and target objects
 
     git = context.window_manager.git
 
-    # Name of the collection in the external file (usually 'Collection' or custom)
-    target_collection_name = git.temp_col_name
+    if git.preview_mode:
+        self.report({'ERROR'}, "Your must disable Preview Mode!")
 
-    target_collection = bpy.data.collections.get(target_collection_name)
-
-    if target_collection:
-        if source_obj.name in target_collection.objects:
-            self.report({'ERROR'}, "Your active object is part of commit state!")
-
-    new_mesh = target_obj.data.copy()
+    new_object = target_data.copy()
 
     # Get the original mesh data-block from the source object
-    old_mesh = source_obj.data
-    replace_datablock_references(old_mesh, new_mesh)
-    # if old_mesh and new_mesh:
-    #     # Loop through all objects using the old mesh
-    #     for obj in bpy.data.objects:
-    #         if obj.data == old_mesh:
-    #             obj.data = new_mesh
-    #             print(f"Replaced mesh in object: {obj.name}")
+    old_object = source_data
+    replace_datablock_references(old_object, new_object)
 
-    #     # Optional: remove old mesh if no longer used
-    #     if old_mesh.users == 0:
-    #         bpy.data.meshes.remove(old_mesh)
-    # else:
-    #     print("One or both mesh datablocks not found.")
+
 class ReassignObject(bpy.types.Operator):
     bl_idname = "git.reassign_object"
     bl_label = "Reassign Objects"
     bl_options = {'REGISTER', 'UNDO'}
 
-    obj_name: bpy.props.StringProperty()
+    state: bpy.props.StringProperty()
            
     def execute(self, context):
         git = context.window_manager.git
@@ -474,11 +512,32 @@ class ReassignObject(bpy.types.Operator):
         source_obj = context.active_object
 
         if source_obj:
+            
+            target_obj = git.state_objects[git.active_state_objects]
 
-            target_obj = git.state_objects[self.obj_name].obj
+            # if self.state == "OBJECT":
+            #     _reassign(self, context, source_obj, target_obj.obj)
+            if self.state == "MESH":
+                _reassign(self, context, source_obj.data, target_obj.obj.data)
+            # if self.state == "ACTION":
+            #     if not source_obj.animation_data:
+            #         self.report({'ERROR'}, "Active object must have animation data or any action!")
+            #         return {'FINISHED'}
+            #     _reassign(self, context, source_obj.animation_data.action, target_obj.obj.animation_data.action)
+            if self.state == "MATERIAL":
+                if len(target_obj.obj.material_slots) != len(source_obj.material_slots):
+                    self.report({'ERROR'}, "Objects must have same material slots amount!")
+                    return {'FINISHED'}
+                for i in range(len(source_obj.material_slots)):
+                    slot = source_obj.material_slots[i]
+                    target_slot = target_obj.obj.material_slots[i]
+                    _reassign(self, context, slot.material, target_slot.material)
+        else:
+            self.report({'ERROR'}, "You have no any active object!")
 
-            _reassign_meshes(self, context, source_obj, target_obj)
-       
+
+
+
         return {'FINISHED'}
 
 class ReassignAllObject(bpy.types.Operator):
@@ -498,11 +557,27 @@ class ReassignAllObject(bpy.types.Operator):
                 if source_obj:
                     if source_obj in context.selected_objects:
                         target_obj = ref_obj.obj
-                        _reassign_meshes(self, context, source_obj, target_obj)
+                        # _reassign(self, context, source_obj, target_obj)
+                        _reassign(self, context, source_obj.data, target_obj.data)
+                        if len(target_obj.material_slots) != len(source_obj.material_slots):
+                            self.report({'INFO'}, "Objects must have same material slots amount!")
+                            continue
+                        for i in range(len(source_obj.material_slots)):
+                            slot = source_obj.material_slots[i]
+                            target_slot = target_obj.material_slots[i]
+                            _reassign(self, context, slot.material, target_slot.material)
             else:
                 if source_obj:
                     target_obj = ref_obj.obj
-                    _reassign_meshes(self, context, source_obj, target_obj)
+                    # _reassign(self, context, source_obj, target_obj)
+                    _reassign(self, context, source_obj.data, target_obj.data)
+                    if len(target_obj.material_slots) != len(source_obj.material_slots):
+                        self.report({'INFO'}, "Objects must have same material slots amount!")
+                        continue
+                    for i in range(len(source_obj.material_slots)):
+                        slot = source_obj.material_slots[i]
+                        target_slot = target_obj.material_slots[i]
+                        _reassign(self, context, slot.material, target_slot.material)
                 
         return {'FINISHED'}
 
@@ -541,6 +616,123 @@ class InsertState(bpy.types.Operator):
         return context.window_manager.invoke_confirm(self, event)
 
 
+def resolve_datablock(attr, value):
+    """Resolve any ID-type to local version by name, or None if not found."""
+    if isinstance(value, bpy.types.ID):
+        datablock_type = type(value).__name__
+        datablock_collection = getattr(bpy.data, datablock_type.lower() + "s", None)
+        if datablock_collection:
+            local = datablock_collection.get(value.name)
+            if local and not local.library:
+                return local
+            else:
+                return None
+    return value
+
+
+def _copy_custom_properties(source, target):
+    for key in source.keys():
+        if key == "_RNA_UI":
+            continue
+        value = source[key]
+        if isinstance(value, dict):
+            # Merge group properties
+            if key not in target:
+                target[key] = {}
+            for subkey, subvalue in value.items():
+                target[key][subkey] = subvalue
+        else:
+            try:
+                target[key] = value
+            except Exception:
+                pass  # Skip if assignment fails
+
+        # Copy UI metadata safely
+    if "_RNA_UI" in source:
+        if "_RNA_UI" not in target:
+            target["_RNA_UI"] = {}
+        for key, value in source["_RNA_UI"].items():
+            try:
+                target["_RNA_UI"][key] = value.copy()
+            except Exception:
+                pass
+
+class CopyCustomProperties(bpy.types.Operator):
+    bl_idname = "git.copy_custom_properties"
+    bl_label = "Copy Custom Properties"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        git = context.window_manager.git
+
+        target_obj = context.active_object
+
+        if target_obj:
+            
+            source_obj = git.state_objects[git.active_state_objects].obj
+
+            _copy_custom_properties(source_obj, target_obj)
+        return {'FINISHED'}
+
+def _copy_constraints(source, target):
+    for con in source.constraints:
+        new_con = target.constraints.new(type=con.type)
+        for attr in dir(con):
+            if not attr.startswith("_") and not callable(getattr(con, attr)):
+                try:
+                    value = getattr(con, attr)
+                    setattr(new_con, attr, resolve_datablock(attr, value))
+                except Exception:
+                    pass
+
+class CopyConstraints(bpy.types.Operator):
+    bl_idname = "git.copy_constraints"
+    bl_label = "Copy Constraints"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        git = context.window_manager.git
+
+        target_obj = context.active_object
+
+        if target_obj:
+            
+            source_obj = git.state_objects[git.active_state_objects].obj
+
+            _copy_constraints(source_obj, target_obj)
+        return {'FINISHED'}
+    
+
+def _copy_modifiers(source, target):
+    for mod in source.modifiers:
+        new_mod = target.modifiers.new(name=mod.name, type=mod.type)
+        for attr in dir(mod):
+            if not attr.startswith("_") and not callable(getattr(mod, attr)):
+                try:
+                    value = getattr(mod, attr)
+                    setattr(new_mod, attr, resolve_datablock(attr, value))
+                    if attr == "node_group":
+                        new_mod.node_group.make_local()
+                except Exception:
+                    pass
+
+class CopyModifiers(bpy.types.Operator):
+    bl_idname = "git.copy_modifiers"
+    bl_label = "Copy Modifiers"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        git = context.window_manager.git
+
+        target_obj = context.active_object
+
+        if target_obj:
+            
+            source_obj = git.state_objects[git.active_state_objects].obj
+
+            _copy_modifiers(source_obj, target_obj)
+        return {'FINISHED'}
+
 
 def _getVersionStatesList(self,context):
     git = context.window_manager.git
@@ -577,6 +769,7 @@ def _getVersionStatesList(self,context):
 
         new_item.name = file.name
         new_item.time = ctime
+
 class GetVersionStatesList(bpy.types.Operator):
     bl_idname = "git.get_states_list"
     bl_label = "Update States List"
@@ -596,6 +789,9 @@ OPERATORS_Classes = [
     ReassignAllObject,
     DeleteState,
     InsertState,
+    CopyModifiers,
+    CopyConstraints,
+    CopyCustomProperties
 ]
 
 
@@ -645,8 +841,15 @@ class ControlVersions(bpy.types.Panel):
 
         if current_state.preview:
             box.template_preview(git.versions_states[git.current_state].preview)
-        
+
         box.template_list("BASICLIST_UL_objects", "", git , "state_objects", git, "active_state_objects")
+
+        _row = box.row(align=True)
+
+        _row.prop(git, "reassign_object", text="", icon="OBJECT_DATAMODE")
+        _row.prop(git, "reassign_mesh", text="", icon="MESH_DATA")
+
+        box.template_list("BASICLIST_UL_datablocks", "", git , "object_datablocks", git, "active_object_datablocks")
 
 
 
@@ -660,7 +863,7 @@ bl_info = {
     "author": "https://github.com/maqq1e",
     "description": "Easy way manage your project versions.",
     "blender": (4, 5, 0),
-    "version": (0, 1, 1),
+    "version": (0, 2, 5),
 }
 
 # class GitPreferences(bpy.types.AddonPreferences):
@@ -683,6 +886,18 @@ class StateObjects(bpy.types.PropertyGroup):
     obj: bpy.props.PointerProperty(type=bpy.types.Object)
 
 
+# class DataBlocksMaterials(bpy.types.PropertyGroup):
+#     name: bpy.props.StringProperty(default="")
+#     material: bpy.props.PointerProperty(type=bpy.types.Material)
+
+class DataBlocks(bpy.types.PropertyGroup):
+    name: bpy.props.StringProperty(default="")
+    obj: bpy.props.PointerProperty(type=bpy.types.Object)
+    mesh: bpy.props.PointerProperty(type=bpy.types.Mesh)
+    material: bpy.props.PointerProperty(type=bpy.types.Material)
+    action: bpy.props.PointerProperty(type=bpy.types.Action)
+
+
 class GitProperties(bpy.types.PropertyGroup):
     # Preferences
     # @property
@@ -703,12 +918,18 @@ class GitProperties(bpy.types.PropertyGroup):
     state_objects: bpy.props.CollectionProperty(type=StateObjects)
     active_state_objects: bpy.props.IntProperty(default=0, update=_selectStateObject)
 
+    object_datablocks: bpy.props.CollectionProperty(type=DataBlocks)
+    active_object_datablocks: bpy.props.IntProperty(default=0)
+
+
 
     batch_selected_only: bpy.props.BoolProperty(default=True, name="Reassign Selected Only")
     commit_selected_only: bpy.props.BoolProperty(default=True, name="Commit Selected Only")
-
     
     preview_mode: bpy.props.BoolProperty(default=False, update=_previewChanges)
+
+    reassign_object: bpy.props.BoolProperty(default=False, name="Reassign Object")
+    reassign_mesh: bpy.props.BoolProperty(default=True, name="Reassign Mesh")
 
 
     
@@ -730,6 +951,8 @@ UsesClasses.extend(MAIN_Classes)
 UsesClasses.extend(UI_Classes)
 UsesClasses.append(GitStates)
 UsesClasses.append(StateObjects)
+# UsesClasses.append(DataBlocksMaterials)
+UsesClasses.append(DataBlocks)
 UsesClasses.append(GitProperties)
 
 
